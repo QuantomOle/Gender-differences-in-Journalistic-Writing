@@ -22,5 +22,5 @@ en <- list(abcnews_df, bbcnews_df, bloomberg_df, breitbart_df, buzzfeed_df, cnbc
 
 de <- list(abendblatt_df, bild_df, faz_df, focus_df, freitag_df, gmx_df, handelsblatt_df, jungefreiheit_df, spiegel_df, stuttgarter_df, tagesspiegel_df, tonline_df, webde_df, welt_df, yahoode_df, zeit_df)
 
-
+# New
 
