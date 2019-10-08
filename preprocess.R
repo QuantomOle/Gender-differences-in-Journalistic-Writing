@@ -5,13 +5,14 @@ setwd("~/Hertie/second_sem/text_data/Gender-differences-in-Journalistic-Writing/
 library(tidyverse)
 
 
-#import data
-path <- "C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/Gender-differences-in-Journalistic-Writing/newspaper-data/"
+#import all the data
+path <- "C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/Gender-differences-in-Journalistic-Writing/"
 files <- list.files(path=path, pattern="*.RDa")
-for(file in files)
-{
-perpos <- which(strsplit(file, "")[[1]]==".")
-assign(
-gsub(" ","",substr(file, 1, perpos-1)), 
-load(paste(path,file,sep="")))
+for(file in files) {
+ load(file) 
 }
+
+#clean
+
+
+
