@@ -3,17 +3,14 @@ setwd("~/Hertie/second_sem/text_data/Gender-differences-in-Journalistic-Writing/
 
 #load libraries
 library(tidyverse)
-library(here)
+#library(here)
 
 #import all the data
 path <- "C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/newspaper-data/"
 files <- list.files(path=path, pattern="*.RDa")
 
 for(file in files){
-  perpos <- which(strsplit(file, "")[[1]]==".")
-  assign(
-  gsub(" ","",substr(file, 1, perpos-1)), 
-  load(paste(path,file,sep="")))
+  load(paste(path,file,sep=""))
 }
 
 
@@ -32,24 +29,23 @@ clean_data <- function(data) {
     data$section = NA
   }
   
-  data <- filter(data, !is.na(author))
-  data$tag <- data$topic_tags
-  data <- select(data, outlet, datetime, headline, description, author, section, domain, tag, text)
+  data <- select(data, outlet, datetime, headline, description, author, section, domain, text)
+  data$author <- gsub(",$", "", data$author) #delete the last comma in the author names
+  data$author <- gsub(".*,.*", NA, data$author) #replace articles containing two authors with NA's
+  data <- filter(data, !is.na(author)) #delete NA's
   
   return(data)
 }
 
 #apply the function 
-en_list <- lapply(en[[1]], clean_data) 
-de_list <- lapply(de, clean_data)
+en_list <- lapply(en, clean_data) 
+de_list <- lapply(de, clean_data) #doesn't work yet
 
-for(i in en) {
-  print(i)
-  x<- clean_data(i)
-  print
-}
+#
+abcnews_short <- (en_list[[1]])
+length(abcnews_short$author[6])
 
+x <-   
 
-x <- clean_data(abcnews_df)
-  
-
+fruits <- c("one apple, two apple", "two pears", "three bananas")
+str_remove(fruits, ".*,.*")
