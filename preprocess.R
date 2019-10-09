@@ -48,7 +48,9 @@ bbc_short %>% count(author)
 unique(bbc_short$author)
 
   
+
 #test code
 fruits <- c("The apple, two apple", "Abc pears", "three bananas", "Espn.com News Services", "Dr. Snow and College")
 str_remove(fruits, "(^The|Abc|Espn.com|News).*")
 str_remove(fruits, ",$|")
+
