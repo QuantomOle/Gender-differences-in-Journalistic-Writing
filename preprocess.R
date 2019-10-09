@@ -31,8 +31,9 @@ clean_data <- function(data) {
   
   data <- select(data, outlet, datetime, headline, description, author, section, domain, text)
   data$author <- gsub(",$", "", data$author) #delete the last comma in the author names
-  data$author <- gsub(".*,.*", NA, data$author) #replace articles containing two authors with NA's
+  data$author <- gsub(".*(,|and|&).*", NA, data$author) #replace articles containing two authors with NA's
   data <- filter(data, !is.na(author)) #delete NA's
+  
   
   return(data)
 }
@@ -42,10 +43,12 @@ en_list <- lapply(en, clean_data)
 de_list <- lapply(de, clean_data) #doesn't work yet
 
 #
-abcnews_short <- (en_list[[1]])
-length(abcnews_short$author[6])
+bbc_short <- (en_list[[2]])
+bbc_short %>% count(author)
+unique(bbc_short$author)
 
-x <-   
-
-fruits <- c("one apple, two apple", "two pears", "three bananas")
-str_remove(fruits, ".*,.*")
+  
+#test code
+fruits <- c("The apple, two apple", "Abc pears", "three bananas", "Espn.com News Services", "Dr. Snow and College")
+str_remove(fruits, "(^The|Abc|Espn.com|News).*")
+str_remove(fruits, ",$|")
