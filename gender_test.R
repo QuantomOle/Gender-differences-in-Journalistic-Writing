@@ -1,28 +1,37 @@
-
 library(dplyr)
 library(stringr)
+getwd() 
+setwd("/Users/carminadietrich/Desktop/Project/Test")
 
 # load, subset and clean data
-df <- load(file = "us/guardian_to_may_2019.RDa")
-df <- guardian_df
-rm(guardian_df)
+df <- load(file = "/Users/carminadietrich/Desktop/Project/newspaper-data/bloomberg_to_may_2019.RDa")
+df <- bloomberg_df
 
-df <- df %>% filter(!is.na(author))
+#clean author
+df$author <- gsub(",$", "", df$author)
+df$author <- gsub(".([a-z]+)\\.", "", df$author) 
+df$author <- gsub("^[A-Z]\\.", "", df$author)
+df$author <- gsub(".(,|and|&).", NA, df$author)
+df <- filter(df, !is.na(author))
 
-length(unique(df$author))
+#extract firstnames
+df$firstname <- word(df$author,1)
 
-df_test <- head(df)
-df_test$firstname <- word(df_test$author,1)
+#unique first names 
+n_distinct(df$firstname)
 
-df_test <- df_test %>% filter(!(firstname=="GrrlScientist")) # manually taking out strange names (we need to find a better
-                                                              # way to do this)
 
-# Test gender prediction
+#load names 
+names <- read.csv(file = "gender_refine-csv.csv")
+colnames(names)[1] <- "firstname"
+df2 <- left_join(df, names[, 1:2], by = "firstname")
 
-library(gender)
+#df2 %>% filter(is.na(gender)) %>% count(firstname) %>% top_n(firstname, w = 10)
 
-df_test$year <- 1990
+#df2 %>% filter(gender == 3) %>% count(firstname)
 
-results <- gender_df(df_test, name_col = "firstname", year_col = "year",
-                     method = "ssa")
-results
+df_clean <- df2 %>% filter(!is.na(gender), gender != 3) %>% 
+  mutate(gender = ifelse(gender == 1, "male", "female")) %>% 
+  select(-c(firstname, author))
+
+
