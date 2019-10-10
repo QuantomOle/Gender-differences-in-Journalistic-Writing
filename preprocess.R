@@ -6,19 +6,13 @@ library(tidyverse)
 #library(here)
 
 #import all the data
-#path <- "C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/newspaper-data/"
-path <- "/Users/carminadietrich/Desktop/Project/newspaper-data-seperated/American/"
+path <- "C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/newspaper-data/"
+#path <- "/Users/carminadietrich/Desktop/Project/newspaper-data-seperated/American/"
 files <- list.files(path=path, pattern="*.(RDa|csv)")
 
 for(file in files){
-  if(".RDa" %in% file) {
     load(paste(path,file,sep=""))
-  }
-  else {
-    read.csv(paste(path, file, sep=""))
-  }
 }
-
 
 
 #create lists of english and german datasets
@@ -49,11 +43,14 @@ clean_data <- function(data) {
   
   return(data)
 }
+
+#load names datafile
+gender_df <- read.csv("C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/newspaper-data/us/gender_refine-csv.csv")
 #rename first column
-colnames(names)[1] <- "firstname"
+colnames(gender_df)[1] <- "firstname"
 
 assign_gender <-function(data) {
-  data <- left_join(data, names[, 1:2], by = "firstname"))
+  data <- left_join(data, gender_df[, 1:2], by = "firstname")
 data<- data %>% filter(!is.na(gender), gender != 3) %>% 
   mutate(gender = ifelse(gender == 1, "male", "female")) %>% 
   select(-c(firstname, author))
@@ -65,8 +62,12 @@ en_list <- lapply(en, clean_data)
 #join the csv file to the dataframes in english list
 en_list2 <- lapply(en_list, assign_gender)
 
+
+#save list
+save(en_list2, file = "en_list_clean.RData")
+
 #test code
-bbc_short <- (en_list[[2]])
+bloomberg_short <- (en_list2[[3]])
 bbc_short %>% count(author)
 unique(bbc_short$author)
 
