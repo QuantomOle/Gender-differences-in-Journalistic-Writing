@@ -1,3 +1,4 @@
+
 #Topic Modelling
 
 library(topicmodels)
@@ -7,9 +8,7 @@ library(RColorBrewer)
 library(LDAvis) #LDA visualizations
 
 #setwd("/Users/carminadietrich/Desktop/Project/newspaper-data-seperated/American")
-
-
-#load the data
+#load  dataset
 load("en_list_clean.RData")
 
 # create guardian dataset
@@ -224,7 +223,6 @@ mguard_pol <- subset(mguard, mguard$domain == "Politics")
 # create corpus for female, male: politics
 fcorpus_pol <- corpus(fguard_pol$text)
 mcorpus_pol <- corpus(mguard_pol$text)
-
 
 
 
