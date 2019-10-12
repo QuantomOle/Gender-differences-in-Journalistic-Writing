@@ -191,6 +191,7 @@ mprobtopics <- dataframe.dtm(mlda)
 
 ###################################################################################################
 #######################################ENVIRONMENT################################################
+K = 10
 #divide male and female: environment
 fguard_env <- subset(fguard, fguard$domain == "Environment") #135
 mguard_env <- subset(mguard, mguard$domain == "Environment") #304
@@ -199,30 +200,194 @@ mguard_env <- subset(mguard, mguard$domain == "Environment") #304
 fcorpus_env <- corpus(fguard_env$text)
 mcorpus_env <- corpus(mguard_env$text)
 
+# preprocess the corpus: dfms
+fdfm_env <- preprocess(fcorpus_env)
+mdfm_env <- preprocess(mcorpus_env)
 
+#FEMALE:ENVIRONMENT
+# convert to a format that we can run the topic model with
+fdtm_env <- convert(fdfm_env, to="topicmodels")
+
+#estimate LDA with K topics
+flda_env <- LDA(fdtm_env, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
+
+#create Json for Shiny-based interactive visualization called LDAvis
+json <- topicmodels_json_ldavis(flda_env,fdfm_env,fdtm_env)
+
+#extract topic order
+new.order <- RJSONIO::fromJSON(json)$topic.order
+
+# visualize LDA results
+serVis(json, out.dir = 'fLDA_env', open.browser = T)
+
+# get the top `n` terms
+fterms_env <- get_terms(flda_env, 15)
+#topics reordered
+fterms_env <- fterms_env[,new.order]
+colnames(fterms_env) <- paste("Topic",1:K)
+fterms_env
+
+fprobtopics_env <- dataframe.dtm(flda_env)
+
+#MALE:ENVIRONMENT
+# convert to a format that we can run the topic model with
+mdtm_env <- convert(mdfm_env, to="topicmodels")
+
+#estimate LDA with K topics
+mlda_env <- LDA(mdtm_env, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
+
+#create Json for Shiny-based interactive visualization called LDAvis
+json <- topicmodels_json_ldavis(mlda_env,mdfm_env,mdtm_env)
+
+#extract topic order
+new.order <- RJSONIO::fromJSON(json)$topic.order
+
+# visualize LDA results
+serVis(json, out.dir = 'mlda_env', open.browser = T)
+
+# get the top `n` terms
+mterms_env <- get_terms(mlda_env, 15)
+#topics reordered
+mterms_env <- mterms_env[,new.order]
+colnames(mterms_env) <- paste("Topic",1:K)
+mterms_env
+
+mprobtopics_env <- dataframe.dtm(mlda_env)
 
 ###################################################################################################
 ########################################SOCIETY##################################################
-# divide male and female: society
-fguard_soc <- subset(fguard, fguard$domain == "Society")
+K = 10
+#divide male and female: society
+fguard_soc <- subset(fguard, fguard$domain == "Society") 
 mguard_soc <- subset(mguard, mguard$domain == "Society")
 
 # create corpus for female, male: society
 fcorpus_soc <- corpus(fguard_soc$text)
 mcorpus_soc <- corpus(mguard_soc$text)
 
+# preprocess the corpus: dfms
+fdfm_soc <- preprocess(fcorpus_soc)
+mdfm_soc <- preprocess(mcorpus_soc)
 
+#FEMALE:society
+# convert to a format that we can run the topic model with
+fdtm_soc <- convert(fdfm_soc, to="topicmodels")
 
+#estimate LDA with K topics
+flda_soc <- LDA(fdtm_soc, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
 
+#create Json for Shiny-based interactive visualization called LDAvis
+json <- topicmodels_json_ldavis(flda_soc,fdfm_soc,fdtm_soc)
+
+#extract topic order
+new.order <- RJSONIO::fromJSON(json)$topic.order
+
+# visualize LDA results
+serVis(json, out.dir = 'fLDA_soc', open.browser = T)
+
+# get the top `n` terms
+fterms_soc <- get_terms(flda_soc, 15)
+#topics reordered
+fterms_soc <- fterms_soc[,new.order]
+colnames(fterms_soc) <- paste("Topic",1:K)
+fterms_soc
+
+fprobtopics_soc <- dataframe.dtm(flda_soc)
+
+#MALE:society
+# convert to a format that we can run the topic model with
+mdtm_soc <- convert(mdfm_soc, to="topicmodels")
+
+#estimate LDA with K topics
+mlda_soc <- LDA(mdtm_soc, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
+
+#create Json for Shiny-based interactive visualization called LDAvis
+json <- topicmodels_json_ldavis(mlda_soc,mdfm_soc,mdtm_soc)
+
+#extract topic order
+new.order <- RJSONIO::fromJSON(json)$topic.order
+
+# visualize LDA results
+serVis(json, out.dir = 'mlda_soc', open.browser = T)
+
+# get the top `n` terms
+mterms_soc <- get_terms(mlda_soc, 15)
+#topics reordered
+mterms_soc <- mterms_soc[,new.order]
+colnames(mterms_soc) <- paste("Topic",1:K)
+mterms_soc
+
+mprobtopics_soc <- dataframe.dtm(mlda_soc)
 
 ############################################################################################################################################POLITICS##################################################
-# divide male and female: politics
-fguard_pol <- subset(fguard, fguard$domain == "Politics")
+K = 10
+#divide male and female: poliety
+fguard_pol <- subset(fguard, fguard$domain == "Politics") 
 mguard_pol <- subset(mguard, mguard$domain == "Politics")
 
-# create corpus for female, male: politics
+# create corpus for female, male: Politics
 fcorpus_pol <- corpus(fguard_pol$text)
 mcorpus_pol <- corpus(mguard_pol$text)
+
+# preprocess the corpus: dfms
+fdfm_pol <- preprocess(fcorpus_pol)
+mdfm_pol <- preprocess(mcorpus_pol)
+
+#FEMALE:Politics
+# convert to a format that we can run the topic model with
+fdtm_pol <- convert(fdfm_pol, to="topicmodels")
+
+#estimate LDA with K topics
+flda_pol <- LDA(fdtm_pol, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
+
+#create Json for Shiny-based interactive visualization called LDAvis
+json <- topicmodels_json_ldavis(flda_pol,fdfm_pol,fdtm_pol)
+
+#extract topic order
+new.order <- RJSONIO::fromJSON(json)$topic.order
+
+# visualize LDA results
+serVis(json, out.dir = 'fLDA_pol', open.browser = T)
+
+# get the top `n` terms
+fterms_pol <- get_terms(flda_pol, 15)
+#topics reordered
+fterms_pol <- fterms_pol[,new.order]
+colnames(fterms_pol) <- paste("Topic",1:K)
+fterms_pol
+
+fprobtopics_pol <- dataframe.dtm(flda_pol)
+
+#MALE:Politics
+# convert to a format that we can run the topic model with
+mdtm_pol <- convert(mdfm_pol, to="topicmodels")
+
+#estimate LDA with K topics
+mlda_pol <- LDA(mdtm_pol, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
+
+#create Json for Shiny-based interactive visualization called LDAvis
+json <- topicmodels_json_ldavis(mlda_pol,mdfm_pol,mdtm_pol)
+
+#extract topic order
+new.order <- RJSONIO::fromJSON(json)$topic.order
+
+# visualize LDA results
+serVis(json, out.dir = 'mlda_pol', open.browser = T)
+
+# get the top `n` terms
+mterms_pol <- get_terms(mlda_pol, 15)
+#topics reordered
+mterms_pol <- mterms_pol[,new.order]
+colnames(mterms_pol) <- paste("Topic",1:K)
+mterms_pol
+
+mprobtopics_pol <- dataframe.dtm(mlda_pol)
 
 
 
