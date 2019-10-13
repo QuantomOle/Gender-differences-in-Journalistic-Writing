@@ -11,7 +11,8 @@ library(text2vec)
 library(glmnet)
 library(e1071)
 library(SparseM)
-library((LiblineaR)
+library(LiblineaR)
+library (tictoc)
 
 #load data
 
@@ -33,10 +34,10 @@ names(df_down)[names(df_down) == "Class"] <- "gender"
 
 # Create a smaller subset for developing the models: Randomizing the rows
 
-set.seed(125)
-df_down <- df_down[sample(row.names (df_down)), ]
+#set.seed(125)
+#df_down <- df_down[sample(row.names (df_down)), ]
 
-df_down <- df_down[1:500,]
+#df_down <- df_down[1:500,]
 
 # Split into training and test
 
@@ -89,12 +90,17 @@ test_dfm <- dfm(tok.balanced,
                 verbose=TRUE,
                 include_docvars = TRUE)
 
-# Ridge Regression Model
+# Baseline: Regression Model
+tic()
+ridge <- glmnet(x=train_dfm, y=train$gender,
+                   alpha=0, family="binomial")
+toc()
 
-ridge <- cv.glmnet(x=train_dfm, y=train$gender,
-                   alpha=0, nfolds=10, family="binomial")
+lasso <- cv.glmnet(x=train_dfm, y=train$gender,
+                   alpha=1, nfolds=10, family="binomial")
 
-plot(ridge)
+elastic_net <- cv.glmnet(x=train_dfm, y=train$gender,
+                      alpha=0.5, nfolds=10, family="binomial")
 
 # Evaluation
 
@@ -104,9 +110,11 @@ predict_test <- predict(ridge, newx=dfmat_matched, type="class")
 table2 <- table(labels_test, predict_test)
 confusionMatrix(table2, mode="everything")
 
-## Naive Bayes Model
 
+## Naive Bayes Model
+tic()
 nb_model <- textmodel_nb(train_dfm, train$gender)
+toc()
 summary(nb_model)
 
 ## Assessing Naive Bayes: Performance on test set ##
@@ -121,25 +129,38 @@ confusionMatrix(table2, mode="everything")
 
 ## SVM Model
 
-svm_model <- svm(train_dfm, labels_train, kernel = "linear") 
+# gridsearch
 
+cv <- trainControl(
+  method = "cv", 
+  number = 5, 
+  classProbs = TRUE, 
+  summaryFunction = twoClassSummary)
+
+grid <- expand.grid(C = c(0,0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2,5))
+
+set.seed(323)
+svm_model_grid <- train(y=labels_train, 
+                   x=train_dfm,
+             method = "svmLinear",
+             tuneGrid = grid,
+             trControl = cv)
+
+plot(svm_model_grid)
+
+tic()
+svm_model_2 <- train(y=labels_train, 
+                        x=train_dfm,
+                        method = "svmLinear",
+                     cost=0.25)
+toc()
+
+tic()
+svm_model <- svm(train_dfm, labels_train, kernel = "linear", cost=0.25) 
+toc()
 
 # Evaluation
 dfmat_matched <- dfm_match(test_dfm, features = featnames(train_dfm))
-predict_test<- predict(svm_model, newdata = dfmat_matched)
+predict_test<- predict(svm_model_2, newdata = dfmat_matched)
 table2 <- table(labels_test, predict_test)
 confusionMatrix(table2, mode="everything")
-
-# Sources
-
-# https://www.rdocumentation.org/packages/e1071/versions/1.7-2/topics/svm
-# https://towardsdatascience.com/multi-class-classification-in-text-using-r-e6cf72ef1da3
-
-### Not working ###
-
-# caret package
-
-svm_model <- train(
-  y=labels_train, 
-  x=train_dfm,
-  method = "svmLinear3")
