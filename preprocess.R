@@ -4,11 +4,12 @@
 #load libraries
 library(tidyverse)
 #library(here)
+library(lubridate)
 
 #import all the data
-path <- "C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/newspaper-data/"
+path <- "C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/newspaper-data/us/"
 #path <- "/Users/carminadietrich/Desktop/Project/newspaper-data-seperated/American/"
-files <- list.files(path=path, pattern="*.(RDa|csv)")
+files <- list.files(path=path, pattern="*.(RDa)")
 
 for(file in files){
     load(paste(path,file,sep=""))
@@ -37,12 +38,23 @@ clean_data <- function(data) {
   data$author <- gsub(".*(,|and|&).*", NA, data$author) #replace articles containing two authors with NA's
   data <- filter(data, !is.na(author)) #delete NA's
   
+  utf8 <- function(x) {
+  x %>% gsub('[^\x20-\x7E]', '', .) %>% 
+    gsub("[^[:alnum:][:blank:]?&/\\-\\.,]", "", .) %>% 
+    gsub("U00..", "", .)}
+  
+  data <- apply(data, 2, utf8)
+  data <- as.data.frame(data, stringsAsFactors = FALSE)
+  data$datetime <- parse_date_time(data$datetime, orders = c("ymd HMS"))
+  
   #create new column firstname
   data$firstname <- word(data$author,1)
   
   
   return(data)
 }
+
+
 
 #load names datafile
 gender_df <- read.csv("C:/Users/JOSHUA/Documents/Hertie/second_sem/text_data/newspaper-data/us/gender_refine-csv.csv")
