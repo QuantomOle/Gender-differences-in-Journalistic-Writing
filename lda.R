@@ -17,8 +17,7 @@ guardian_df <- en_list2[[9]]
 #remove the list
 #rm(en_list2)
 
-#save(guardian_df, "guardian.RData")
-#test <- read.csv("guardian.csv", stringsAsFactors = FALSE)
+#saveRDS(guardian_df, "guardian.RDS")
 
 #divide female and male
 fguard <-subset(guardian_df, guardian_df$gender == "female") #5619
