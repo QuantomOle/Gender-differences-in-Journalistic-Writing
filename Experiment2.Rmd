@@ -1,6 +1,8 @@
 ---
-title: "classification_models2"
+title: "Experiment2"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -10,9 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 #load libraries
 library(tidyverse)
 library(caret)
-library(quanteda) 
+library(quanteda)
 library(kernlab) #svm
 library(klaR) #naive bayes
+library(glmnet) 
 ```
  
 ```{r}
@@ -241,7 +244,6 @@ ctrl <- trainControl(method="cv", number = 5, classProbs = TRUE)
 set.seed(123)
 svm.linear  <- train(author_gender ~ ., data=dfTrain, trControl = ctrl, method = "svmLinear")
 
-
 # fit SVM using weighted train set
 # kernel: linear 
 # tuning parameters: C 
@@ -262,9 +264,10 @@ confusionMatrix(svm.linear.predict, as.factor(dfTest$author_gender)) #linear ker
 
 confusionMatrix(svm.tfidf.linear.predict, as.factor(dfTest_w$author_gender)) #linear kernel, weighted
 
+
 # get execution time
 svm.linear$times
-svm.tfidf.linear$timeshg
+svm.tfidf.linear$times
 ```
 
 ##Naive Bayes
@@ -355,60 +358,12 @@ ridge.tfidf$times
 ```
 
 
-##Lasso
-
 ```{r}
-# resampling scheme
-ctrl <- trainControl("cv", number = 5)
-
-#set up a grid range of lambda values
-lambda <- 10^seq(-3, 3, length = 100)
-
-#fit Lasso Regression using unweighted Train set
-set.seed(123)
-lasso <- train(
-  author_gender ~., data = dfTrain, method = "glmnet",
-  trControl = ctrl,
-  tuneGrid = expand.grid(alpha = 1, lambda = lambda)
-  )
-
-#fit Lasso Regression using unweighted Train set
-set.seed(123)
-lasso.tfidf <- train(
-  author_gender ~., data = dfTrain_w, method = "glmnet",
-  trControl = ctrl,
-  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
-  )
-
-
-#model output 
-lasso
-lasso.tfidf
-
-# predict on test data
-lasso.predict <- predict(lasso, newdata = dfTest) 
-
-lasso.tfidf.predict <- predict(lasso.tfidf, newdata = dfTest_w)
-
-#confusion matrix
-confusionMatrix(lasso.predict, as.factor(dfTest$author_gender))
-
-confusionMatrix(lasso.tfidf.predict, as.factor(dfTest_w$author_gender))
-
-#get execution time
-lasso$times
-lasso.tfidf$times
-```
-
-
-```{r}
-models <- list(Ridge = ridge, Ridge.tfidf = ridge.tfidf, Lasso = lasso, 
-               Lasso.tfidf = lasso.tfidf, NaiveBayes = nb.fit, NaiveBayes.tfidf = nb.tfidf, RandomForest = rf.fit, RandomForest.tfidf = rf.tfidf, SVM.linear = svm.linear, SVM.tdidf.linear = svm.tfidf.linear, kNN = knn.fit, kNN.tfidf = knn.tfidf)
+models <- list(Ridge = ridge, Ridge.tfidf = ridge.tfidf, NaiveBayes = nb.fit, NaiveBayes.tfidf = nb.tfidf, RandomForest = rf.fit, RandomForest.tfidf = rf.tfidf, SVM.linear = svm.linear, SVM.tdidf.linear = svm.tfidf.linear, kNN = knn.fit, kNN.tfidf = knn.tfidf)
 results <- resamples(models)
 
 #boxplot
 bwplot(results)
-dotplot(results)
 
 # stopCluster(cores)
 ```
