@@ -10,14 +10,15 @@ knitr::opts_chunk$set(echo = TRUE)
 #load libraries
 library(tidyverse)
 library(caret)
-library(quanteda)
-library(kernlab)
+library(quanteda) 
+library(kernlab) #svm
+library(klaR) #naive bayes
 ```
  
 ```{r}
 #import data
 bloomberg <- read.csv("bloomberg.csv", stringsAsFactors = FALSE)
-df <- bloomberg %>% select(outlet, domain, text, gender)
+df <- bloomberg %>% dplyr::select(outlet, domain, text, gender)
 remove(bloomberg)
 ```
 
@@ -240,10 +241,6 @@ ctrl <- trainControl(method="cv", number = 5, classProbs = TRUE)
 set.seed(123)
 svm.linear  <- train(author_gender ~ ., data=dfTrain, trControl = ctrl, method = "svmLinear")
 
-# kernel: radial basis function
-# tuning parameters: sigma, C 
-set.seed(123)
-svm.radial  <- train(author_gender ~ ., data=dfTrain, trControl = ctrl, method = "svmRadial")
 
 # fit SVM using weighted train set
 # kernel: linear 
@@ -251,41 +248,23 @@ svm.radial  <- train(author_gender ~ ., data=dfTrain, trControl = ctrl, method =
 set.seed(123)
 svm.tfidf.linear  <- train(author_gender ~ ., data=dfTrain_w, trControl = ctrl, method = "svmLinear")
 
-# kernel: radial basis function
-# tuning parameters: sigma, C 
-set.seed(123)
-svm.tfidf.radial  <- train(author_gender ~ ., data=dfTrain_w, trControl = ctrl, method = "svmRadial")
-
 #outputs
 svm.linear
 svm.tfidf.linear
-svm.radial
-svm.tfidf.radial
 
 # predict on test data
 svm.linear.predict <- predict(svm.linear,newdata = dfTest)
 
 svm.tfidf.linear.predict <- predict(svm.tfidf.linear,newdata = dfTest_w)
 
-svm.radial.predict <- predict(svm.radial,newdata = dfTest)
-
-svm.tfidf.radial.predict <- predict(svm.tfidf.radial,newdata = dfTest_w)
-
 #confusion matrices
 confusionMatrix(svm.linear.predict, as.factor(dfTest$author_gender)) #linear kernel, unweighted
 
 confusionMatrix(svm.tfidf.linear.predict, as.factor(dfTest_w$author_gender)) #linear kernel, weighted
 
-
-confusionMatrix(svm.radial.predict, as.factor(dfTest$author_gender)) # radial kernel, unweighted
-
-confusionMatrix(svm.tfidf.radial.predict, as.factor(dfTest$author_gender)) # radial kernel, weighted
-
 # get execution time
 svm.linear$times
-svm.tfidf.linear$times
-svm.radial$times
-svm.tfidf.radial$times
+svm.tfidf.linear$timeshg
 ```
 
 ##Naive Bayes
