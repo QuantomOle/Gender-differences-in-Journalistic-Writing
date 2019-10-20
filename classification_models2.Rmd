@@ -286,8 +286,150 @@ svm.linear$times
 svm.tfidf.linear$times
 svm.radial$times
 svm.tfidf.radial$times
+```
 
+##Naive Bayes
+```{r, warning=FALSE, message=FALSE}
+#resampling scheme
+ctrl <- trainControl(method = "cv", number = 5)
+
+#fit a Naive Bayes model using the unweighted Train set
+set.seed(123)
+nb.fit <- train(author_gender ~., 
+                 data = dfTrain, 
+                 method="nb", 
+                 trControl = ctrl)
+
+#fit a Naive Bayes model using weighted Train set
+set.seed(123)
+nb.tfidf <- train(author_gender ~., 
+                 data = dfTrain_w, 
+                 method="nb", 
+                 trControl = ctrl)
+
+#model output
+nb.fit
+nb.tfidf
+
+plot(nb.fit) 
+
+plot(nb.tfidf)
+
+# predict on test data
+nb.predict <- predict(nb.fit, newdata = dfTest)
+
+nb.tfidf.predict <- predict(nb.tfidf, newdata = dfTest_w)
+
+#confusion matrix
+confusionMatrix(nb.predict, as.factor(dfTest$author_gender))
+
+confusionMatrix(nb.tfidf.predict, as.factor(dfTest_w$author_gender))
+
+#get execution time
+nb.fit$times
+nb.tfidf$times
+```
+
+
+##Ridge Regression
+```{r}
+# resampling scheme
+ctrl <- trainControl("cv", number = 5)
+
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#fit Ridge Regression using unweighted Train set
+set.seed(123)
+ridge <- train(
+  author_gender ~., data = dfTrain, method = "glmnet",
+  trControl = ctrl,
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+  )
+
+#fit Ridge Regression using unweighted Train set
+set.seed(123)
+ridge.tfidf <- train(
+  author_gender ~., data = dfTrain_w, method = "glmnet",
+  trControl = ctrl,
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+  )
+
+
+#model output 
+ridge
+ridge.tfidf
+
+# predict on test data
+ridge.predict <- predict(ridge, newdata = dfTest) 
+
+ridge.tfidf.predict <- predict(ridge.tfidf, newdata = dfTest_w)
+
+#confusion matrix
+confusionMatrix(ridge.predict, as.factor(dfTest$author_gender))
+
+confusionMatrix(ridge.tfidf.predict, as.factor(dfTest_w$author_gender))
+
+#get execution time
+ridge$times
+ridge.tfidf$times
+```
+
+
+##Lasso
+
+```{r}
+# resampling scheme
+ctrl <- trainControl("cv", number = 5)
+
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#fit Lasso Regression using unweighted Train set
+set.seed(123)
+lasso <- train(
+  author_gender ~., data = dfTrain, method = "glmnet",
+  trControl = ctrl,
+  tuneGrid = expand.grid(alpha = 1, lambda = lambda)
+  )
+
+#fit Lasso Regression using unweighted Train set
+set.seed(123)
+lasso.tfidf <- train(
+  author_gender ~., data = dfTrain_w, method = "glmnet",
+  trControl = ctrl,
+  tuneGrid = expand.grid(alpha = 0, lambda = lambda)
+  )
+
+
+#model output 
+lasso
+lasso.tfidf
+
+# predict on test data
+lasso.predict <- predict(lasso, newdata = dfTest) 
+
+lasso.tfidf.predict <- predict(lasso.tfidf, newdata = dfTest_w)
+
+#confusion matrix
+confusionMatrix(lasso.predict, as.factor(dfTest$author_gender))
+
+confusionMatrix(lasso.tfidf.predict, as.factor(dfTest_w$author_gender))
+
+#get execution time
+lasso$times
+lasso.tfidf$times
+```
+
+
+```{r}
+models <- list(Ridge = ridge, Ridge.tfidf = ridge.tfidf, Lasso = lasso, 
+               Lasso.tfidf = lasso.tfidf, NaiveBayes = nb.fit, NaiveBayes.tfidf = nb.tfidf, RandomForest = rf.fit, RandomForest.tfidf = rf.tfidf, SVM.linear = svm.linear, SVM.tdidf.linear = svm.tfidf.linear, kNN = knn.fit, kNN.tfidf = knn.tfidf)
+results <- resamples(models)
+
+#boxplot
+bwplot(results)
+dotplot(results)
 
 # stopCluster(cores)
 ```
-
