@@ -1,0 +1,349 @@
+---
+title: "Feature Selection using LDA (Unigrams; K=80)"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+In this file, we use train an LDA model using 80 topics.
+
+```{r}
+# install required packages.
+#install.packages(c("tidyverse", "caret", "quanteda", "kernlab", "klaR", "glmnet", "ldatuning","mlbench", "randomForest", "e1071", "topic80s", "DALEX", "irlba"))
+#load libraries
+library(tidyverse)
+library(caret)
+library(quanteda)
+library(kernlab) #svm
+library(klaR) #naive bayes
+library(glmnet) 
+library(ldatuning)
+library(mlbench)
+library(randomForest)
+library(e1071)
+library(topic80s)
+library(DALEX)
+library(irlba)
+library(doSNOW)
+```
+
+
+```{r}
+#import merged tokens
+load("merged_tokens.RData")
+```
+
+
+
+```{r}
+#fit the model with 80 topics for unigram dfm
+K = 80
+
+#time the code execution
+start.time <- Sys.time()
+
+# create a cluster to work on 10 mlogical cores
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+lda_80 <- LDA(merged_tokens.dfm, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
+
+# processing is done; stop cluster
+stopCluster(cl)
+
+# Total execution time on work station
+total.time <- Sys.time() - start.time
+total.time 
+
+#save model
+save(lda_80, file = "lda_80.RData")
+
+# write a function to create a dataframe of document-topic matrix
+dataframe.dtm <- function(lda_model) {
+  #extract the document-topic probability matrix
+  post_list <- posterior(lda_model)
+  
+  #present document-topic probability matrix as a data frame
+  dtm <- data.frame(post_list$topics)
+  
+  #change column names
+  colnames(dtm) <- paste("Topic",1:K)
+  
+  return(dtm)
+}
+#create dataframe from the document-topic matrix
+lda.df <- dataframe.dtm(lda_80)
+
+#split tthe data frame into training and test sets
+train_lda_80.df <- lda.df[which(merged$train_test == "train"), ]
+test_lda_80.df <- lda.df[which(merged$train_test == "test"), ]
+
+#save train and test sets
+write.csv(train_lda_80.df, file = "train_lda_80.df.csv")
+write.csv(test_lda_80.df, file = "test_lda_80.df.csv")
+```
+
+
+### Model Training
+
+We use the caret package for 5 fold cross validation.
+
+#### Random Forest Model
+
+We train a random Forest model.
+
+```{r}
+# for reproducibility
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#mtry: Number of random variables collected at each split
+mtry <- sqrt(ncol(train_lda.df))
+
+tunegrid <- expand.grid(.mtry=c(1:15))
+
+#train the model
+rfLDA_80 <- train(as.matrix(train_lda_80.df),
+                      docvars(train.dfm, "gender"),
+                      method = "rf",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+#output
+rfLDA_80
+
+#save  the model
+save(rfLDA_80, file="rfLDA_80.RData")
+
+max(rfLDA_80$results$Accuracy) 
+
+#plots
+plot(rfLDA_80)
+
+rfLDA_80$times
+```
+
+The results show an accuracy of 68.64 produced by the random forest model - a slight imporvement from 68.61 using K = 100. It took 599.89 secs to run.
+
+Let's run the ridge regression model.
+
+#### Ridge Regression Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#set tune grid
+tunegrid <- expand.grid(alpha = 0, lambda = lambda)
+
+#train the model
+ridgeLDA_80 <- train(as.matrix(train_lda_80.df),
+                      docvars(train.dfm, "gender"),
+                      method = "glmnet",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time  
+
+#output
+ridgeLDA_80
+
+#save  the model
+save(ridgeLDA_80, file="ridgeLDA.RData")
+
+max(ridgeLDA_80$results$Accuracy) 
+
+#plots
+plot(ridgeLDA_80)
+```
+
+
+Let's run the naive bayes model
+
+#### Naive Bayes model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+
+
+#train the 80
+nbLDA_80 <- train(as.matrix(train_lda_80.df),
+                      docvars(train.dfm, "gender"),
+                      method = "nb",
+                      trControl = ctrl)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time  
+
+#output
+nbLDA_80
+
+#save  the model
+save(nbLDA_80, file="nbLDA_80.RData")
+
+max(nbLDA_80$results$Accuracy) 
+
+#plot
+plot(nbLDA_80)
+
+nbLDA_80$times
+```
+
+Our naive bayes model using 80 topics produced an accuracy of 60.26. This is a slight decline from thr Naive Bayes model when we use K = 100 which produced an accuracy of 61.15. Elpased time is 27.95 secs.
+
+
+Let's run a KNN model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+
+
+#train the model
+knnLDA_80 <- train(as.matrix(train_lda_80.df),
+                  docvars(train.dfm, "gender"),
+                  method = "knn",
+                  trControl = ctrl,
+                  tuneLength = 10)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+knnLDA_80
+
+#save  the model
+save(knnLDA_80, file="knnLDA_80.RData")
+
+max(knnLDA_80$results$Accuracy) 
+
+#plot
+plot(knnLDA_80)
+
+knnLDA_80$times
+```
+
+Our knn model using 80 topics produced an accuracy of 68.52 which is slightly higher than the performance of the same model using K = 100 (67.82). Elapsed time is 58.48 secs.
+
+## Model Evaluation on Test Sets
+
+We check the performance of our models on our test set.
+
+##### Random Forest
+
+```{r}
+#predict on test data
+rfLDA_80.predict <- predict(rfLDA_80, newdata = test_lda_80.df)
+
+#confusion matrix
+confusionMatrix(rfLDA_80.predict, docvars(test.dfm, "gender"))
+```
+
+Our random forest model produced an accuracy of 68.63.
+
+##### Ridge Regression
+
+```{r}
+#predict on test data
+ridgeLDA_80.predict <- predict(ridgeLDA_80, newdata = test_lda_80.df)
+
+#confusion matrix
+confusionMatrix(ridgeLDA_80.predict, docvars(test.dfm, "gender"))
+```
+
+
+##### Naive Bayes
+
+```{r}
+#predict on test data
+nbLDA_80.predict <- predict(nbLDA_80, newdata = test_lda_80.df)
+
+#confusion matrix
+confusionMatrix(nbLDA_80.predict, docvars(test.dfm, "gender"))
+```
+
+Naive Bayes produces an accuracy of 61.94
+
+##### k-Nearest Neighbors
+
+```{r}
+#predict on test data
+knnLDA_80.predict <- predict(knnLDA_80, newdata = test_lda_80.df)
+
+#confusion matrix
+confusionMatrix(knnLDA_80.predict, docvars(test.dfm, "gender"))
+```
+
+kNN produced an accuracy of 67.22
+

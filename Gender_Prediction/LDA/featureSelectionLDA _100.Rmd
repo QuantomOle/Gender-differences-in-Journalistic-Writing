@@ -1,0 +1,474 @@
+---
+title: "Feature Selection using LDA (Unigrams; K=100)"
+author: "Aje Joshua Ayodele"
+date: "12 November 2019"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+# install required packages.
+#install.packages(c("tidyverse", "caret", "quanteda", "kernlab", "klaR", "glmnet", "ldatuning","mlbench", "randomForest", "e1071", "topicmodels", "DALEX", "irlba"))
+#load libraries
+library(tidyverse)
+library(caret)
+library(quanteda)
+library(kernlab) #svm
+library(klaR) #naive bayes
+library(glmnet) 
+library(ldatuning)
+library(mlbench)
+library(randomForest)
+library(e1071)
+library(topicmodels)
+library(DALEX)
+library(irlba)
+library(doSNOW)
+```
+
+```{r}
+#import data
+guardian <- read.csv("guardian.csv", stringsAsFactors = FALSE)
+df <- guardian %>% dplyr::select(text, gender) %>% 
+  mutate(gender = factor(gender))
+remove(guardian)
+
+# add a new variable that captures the length of articles
+df$textLength <- nchar(df$text)
+summary(df$textLength)
+
+#remove missing observations
+df <- df[complete.cases(df), ]
+
+#remove articles with text length less than 1500
+df <- df %>% 
+  filter(textLength >= 1500)
+```
+
+### Stratified Splitting
+
+We perform a 70/30 stratified splitting of our gender class 
+```{r}
+# ensure repeatable results
+set.seed(123)
+index <- createDataPartition(df$gender, times = 1, p = 0.7, list = FALSE)
+
+# generate train and test sets
+train <- df[index,]
+test <- df[-index,]
+
+# check to see proportions are maintained
+prop.table(table(train$gender))
+prop.table(table(test$gender))
+
+#create variable to denote if observation is train or test
+train$train_test <- c("train")
+test$train_test <- c("test")
+
+#merge train and test data
+merged <- rbind(train, test)
+
+#remove test and train and the previous dataframe
+remove(train, test, df)
+```
+
+
+### Data Preprocessing and Feature Extraction
+
+```{r}
+#createa a corpus
+corp <- corpus(merged, text_field = "text")
+
+#tokenize the texts
+merged_tokens <- tokens(corp,
+                       remove_numbers = TRUE, 
+                       remove_punct = TRUE,
+                       remove_symbols = TRUE, 
+                       remove_hyphens = TRUE,
+                       remove_twitter = TRUE,
+                       remove_url = TRUE)
+
+# lower case the tokens.
+merged_tokens <- tokens_tolower(merged_tokens)
+
+# remove english stopwords
+merged_tokens <- tokens_select(merged_tokens, stopwords(), selection = "remove")
+
+# stem the tokens
+merged_tokens <- tokens_wordstem(merged_tokens, language = "english")
+
+#save the tokens
+save(merged_tokens, file = "merged_tokens.RData")
+
+# convert tokens to dfm using Bag of Words model
+merged_tokens.dfm <- dfm(merged_tokens, tolower = FALSE)
+dim(merged_tokens.dfm) #118723 features
+
+#view structure of the dfm
+summary(colSums(merged_tokens.dfm))
+
+#top 6 terms by docfrequency
+sort(head(docfreq(merged_tokens.dfm)), decreasing = TRUE)
+
+# since the doc frequency is highly skewed we trim the dfm to keep only terms that appear 
+# in at most 40% of the documents. 
+merged_tokens.dfm <- dfm_trim(merged_tokens.dfm, max_docfreq = 0.4, docfreq_type = "prop")
+
+# inspect the dimensions of the trimmed dfm
+dim(merged_tokens.dfm) #118681 features
+
+
+# Next, to omit terms with low frequency, we only include terms higher than the mean of the term frequency
+merged_tokens.dfm <- merged_tokens.dfm[ , colSums(merged_tokens.dfm) > summary(colSums(merged_tokens.dfm))[4]]
+
+#inspect the dimensions
+dim(merged_tokens.dfm) #9370 features
+```
+
+```{r}
+#create train and test dfms for the purpose of extracting the gender covariate when training our models
+train.dfm <- merged_tokens.dfm[which(merged$train_test == "train"), ]
+test.dfm <- merged_tokens.dfm[which(merged$train_test == "test"), ]
+
+#save both for future reference
+save(train.dfm, file = "train.dfm.RData")
+save(test.dfm, file = "test.dfm.RData")
+```
+
+### Topic Modelling
+We estimate the optimum number of topics for the model using the `ldatuning` package which realizes four metrics. The Arun2010 and CaoJuan2009 metrics are to be minimized, while the Deveaud2014 and Griffiths2004 metrics are to be maximized. This stage is crucial as the correct number of topics determine the quality of features used for the classifiers. We estimate the number of topics using the weighted unigram dfm.
+
+We use the doSNOW package to to allow for multi-core training in parallel due to the large size of our dataset.
+```{r}
+#install.packages("doSNOW")
+library(doSNOW)
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+```
+```{r}
+result_topics <- FindTopicsNumber(
+  train.dfm,
+  topics = seq(from = 20, to = 100, by = 20),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 123),
+   verbose = TRUE
+)
+  # plot
+FindTopicsNumber_plot(result_topics)
+```
+
+We find that the optimum number of topics is 100, so we use this to estimate our models.
+```{r}
+#fit the model with 100 topics for unigram dfm
+K = 100
+
+#time the code execution
+start.time <- Sys.time()
+
+# create a cluster to work on 10 mlogical cores
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+lda_model <- LDA(merged_tokens.dfm, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
+
+# processing is done; stop cluster
+stopCluster(cl)
+
+# Total execution time on work station
+total.time <- Sys.time() - start.time
+total.time #26.02228 mins
+
+#save model
+save(lda_model, file = "lda_model.RData")
+
+# write a function to create a dataframe of document-topic matrix
+dataframe.dtm <- function(lda_model) {
+  #extract the document-topic probability matrix
+  post_list <- posterior(lda_model)
+  
+  #present document-topic probability matrix as a data frame
+  dtm <- data.frame(post_list$topics)
+  
+  #change column names
+  colnames(dtm) <- paste("Topic",1:K)
+  
+  return(dtm)
+}
+#create dataframe from the document-topic matrix
+lda.df <- dataframe.dtm(lda_model)
+
+#split tthe data frame into training and test sets
+train_lda.df <- lda.df[which(merged$train_test == "train"), ]
+test_lda.df <- lda.df[which(merged$train_test == "test"), ]
+
+#save train and test sets
+write.csv(train_lda.df, file = "train_lda.df.csv")
+write.csv(test_lda.df, file = "test_lda.df.csv")
+```
+
+
+### Model Training
+
+We use the caret package for 5 fold cross validation.
+
+#### Random Forest Model
+
+We train a random Forest model.
+
+```{r}
+# for reproducibility
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+#mtry: Number of random variables collected at each split
+mtry <- sqrt(ncol(train_lda.df))
+tunegrid <- expand.grid(.mtry=c(1:15))
+#train the model
+rfLDA <- train(as.matrix(train_lda.df),
+                      docvars(train.dfm, "gender"),
+                      method = "rf",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time  #37.2321 mins
+
+#output
+rfLDA
+#save  the model
+save(rfLDA, file="rfLDA.RData")
+max(rfLDA$results$Accuracy) 
+#plots
+plot(rfLDA)
+
+```
+
+The results show an accuracy of 68.61 produced by the random forest model. It took 12.66947 mins or 757.91 secs to run.
+
+Let's run the ridge regression model
+
+#### Ridge Regression Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#set tune grid
+tunegrid <- expand.grid(alpha = 0, lambda = lambda)
+
+#train the model
+ridgeLDA <- train(as.matrix(train_lda.df),
+                      docvars(train.dfm, "gender"),
+                      method = "glmnet",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time  #37.2321 mins
+
+#output
+ridgeLDA
+
+#save  the model
+save(ridgeLDA, file="ridgeLDA.RData")
+
+max(ridgeLDA$results$Accuracy) 
+
+#plots
+plot(ridgeLDA)
+```
+
+
+Let's run the naive bayes model
+
+#### Naive Bayes Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+
+
+#train the model
+nbLDA <- train(as.matrix(train_lda.df),
+                      docvars(train.dfm, "gender"),
+                      method = "nb",
+                      trControl = ctrl)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time  
+
+#output
+nbLDA
+
+#save  the model
+save(nbLDA, file="nbLDA.RData")
+
+max(nbLDA$results$Accuracy) 
+
+#plots
+plot(nbLDA)
+
+nbLDA$times
+```
+
+Our naive bayes model performed worse than the random forest with an accuracy of 61.15. Elpased time is 35.65 secs.
+
+
+Let's run a KNN model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+
+
+#train the model
+knnLDA <- train(as.matrix(train_lda.df),
+                   docvars(train.dfm, "gender"),
+                   method = "knn",
+                   trControl = ctrl,
+                tuneLength = 10)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+knnLDA
+
+#save  the model
+save(knnLDA, file="knnLDA.RData")
+
+max(knnLDA$results$Accuracy) 
+
+#plot
+plot(knnLDA)
+
+knnLDA$times
+```
+
+Our knn model using 100 topics produced an accuracy of 68.24. Elapsed time is 75.90 secs
+
+
+## Model Evaluation on Test Sets
+
+We check the performance of our models on our test set.
+
+##### Random Forest
+
+```{r}
+#predict on test data
+rfLDA.predict <- predict(rfLDA, newdata = test_lda.df)
+
+#confusion matrix
+confusionMatrix(rfLDA.predict, docvars(test.dfm, "gender"))
+```
+
+Our random forest model produced an accuracy of 68.48.
+
+##### Ridge Regression
+
+```{r}
+#predict on test data
+ridgeLDA.predict <- predict(ridgeLDA, newdata = test_lda.df)
+
+#confusion matrix
+confusionMatrix(ridgeLDA.predict, docvars(test.dfm, "gender"))
+```
+
+
+##### Naive Bayes
+
+```{r}
+#predict on test data
+nbLDA.predict <- predict(nbLDA, newdata = test_lda.df)
+
+#confusion matrix
+confusionMatrix(nbLDA.predict, docvars(test.dfm, "gender"))
+```
+
+Naive Bayes produces an accuracy of 60.73.
+
+##### k-Nearest Neighbors
+
+```{r}
+#predict on test data
+knnLDA.predict <- predict(knnLDA, newdata = test_lda.df)
+
+#confusion matrix
+confusionMatrix(knnLDA.predict, docvars(test.dfm, "gender"))
+```
+
+kNN produced an accuracy of 68.68

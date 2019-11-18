@@ -1,0 +1,341 @@
+---
+title: "Feature Selection using LDA (N-grams, N= 1:2; K= 100)"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+In this file, we use train an LDA model using 100 topics and a dfm that contains unigrams and bigrams.
+
+```{r}
+#import merged tokens
+load("merged_tokens.RData")
+```
+
+```{r}
+#add bigrams to your feature vocabulary
+merged_tokens_bi <- tokens_ngrams(merged_tokens, n = 1:2, concatenator = "_")
+
+# convert merged tokens to dfm using Bag of Words model
+merged_tokens_bi.dfm <- dfm(merged_tokens_bi, tolower = FALSE)
+dim(merged_tokens_bi.dfm) 
+
+#view structure of the dfm
+summary(colSums(merged_tokens_bi.dfm))
+
+#top 6 terms by docfrequency
+sort(head(docfreq(merged_tokens_bi.dfm)), decreasing = TRUE)
+
+# since the doc frequency is highly skewed we trim the dfm to keep only terms that appear 
+# in at most 40% of the documents. 
+merged_tokens_bi.dfm <- dfm_trim(merged_tokens_bi.dfm, max_docfreq = 0.4, docfreq_type = "prop")
+
+# inspect the dimensions of the trimmed dfm
+dim(merged_tokens_bi.dfm) 
+
+
+# Next, to omit terms with low frequency, we only include terms higher than the mean of the term frequency
+merged_tokens_bi.dfm <- merged_tokens_bi.dfm[ , colSums(merged_tokens_bi.dfm) > summary(colSums(merged_tokens_bi.dfm))[4]]
+
+#inspect the dimensions
+dim(merged_tokens_bi.dfm) 
+```
+
+We fit the model using K = 100
+```{r}
+#fit the model with 100 topics for unigram dfm
+K = 100
+
+#time the code execution
+start.time <- Sys.time()
+
+# create a cluster to work on 10 mlogical cores
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+lda_model_bi <- LDA(merged_tokens_bi.dfm, k = K, method = "Gibbs", 
+            control = list(verbose=25L, seed = 123, burnin = 100, iter = 500))
+
+# processing is done; stop cluster
+stopCluster(cl)
+
+# Total execution time on work station
+total.time <- Sys.time() - start.time
+total.time #46.63167 mins
+
+#save model
+save(lda_model_bi, file = "lda_model_bi.RData")
+
+# write a function to create a dataframe of document-topic matrix
+dataframe.dtm <- function(lda_model) {
+  #extract the document-topic probability matrix
+  post_list <- posterior(lda_model)
+  
+  #present document-topic probability matrix as a data frame
+  dtm <- data.frame(post_list$topics)
+  
+  #change column names
+  colnames(dtm) <- paste("Topic",1:K)
+  
+  return(dtm)
+}
+#create dataframe from the document-topic matrix
+lda_bi.df <- dataframe.dtm(lda_model_bi)
+
+#split the data frame into training and test sets
+train_lda_bi.df <- lda_bi.df[which(merged$train_test == "train"), ]
+test_lda_bi.df <- lda_bi.df[which(merged$train_test == "test"), ]
+
+#save train and test sets
+write.csv(train_lda_bi.df, file = "train_lda_bi.df.csv")
+write.csv(test_lda_bi.df, file = "test_lda_bi.df.csv")
+```
+
+## Model Training
+We train our models on the bigrammed dfm
+
+#### Random Forest Model
+
+```{r}
+# for reproducibility
+set.seed(123)
+
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#mtry: Number of random variables collected at each split
+mtry <- sqrt(ncol(train_lda_bi.df))
+tunegrid <- expand.grid(.mtry=c(1:15))
+
+#train the model
+rfLDA_bi <- train(as.matrix(train_lda_bi.df),
+                      docvars(train.dfm, "gender"),
+                      method = "rf",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+#output
+rfLDA_bi
+
+#save  the model
+save(rfLDA_bi, file="rfLDA_bi.RData")
+max(rfLDA_bi$results$Accuracy) 
+#plots
+plot(rfLDA_bi)
+
+rfLDA_bi$times
+
+```
+
+The results of adding bigrams to our feature matrix show a slight increase in the accuracy from 68.61 to 68.97. Time elapsed is 750.89 secs.
+
+
+
+Let's run the ridge regression model
+
+#### Ridge Regression Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#set tune grid
+tunegrid <- expand.grid(alpha = 0, lambda = lambda)
+
+#train the model
+ridgeLDA_bi <- train(as.matrix(train_lda_bi.df),
+                      docvars(train.dfm, "gender"),
+                      method = "glmnet",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+#output
+ridgeLDA_bi
+
+#save  the model
+save(ridgeLDA_bi, file="ridgeLDA_bi.RData")
+
+max(ridgeLDA_bi$results$Accuracy) 
+
+#plots
+plot(ridgeLDA_bi)
+```
+
+
+Let's run the naive bayes model
+
+#### Naive Bayes Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE)
+
+
+#train the model
+nbLDA_bi <- train(as.matrix(train_lda_bi.df),
+                      docvars(train.dfm, "gender"),
+                      method = "nb",
+                      trControl = ctrl)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+nbLDA_bi
+
+#save  the model
+save(nbLDA_bi, file="nbLDA_bi.RData")
+
+max(nbLDA_bi$results$Accuracy) 
+
+#plots
+plot(nbLDA_bi)
+
+```
+
+Our naive bayes model using ngrams produces slightly better results compared to unigrams but still doesn't do better than the random forest. It's accuracy score is 62.09. Elpased time is 35.05 secs.
+
+#### KNN model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+
+
+#train the model
+knnLDA_bi <- train(as.matrix(train_lda_bi.df),
+                      docvars(train.dfm, "gender"),
+                      method = "knn",
+                      trControl = ctrl,
+                   tuneLength = 10)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+#output
+knnLDA_bi
+
+#save  the model
+save(knnLDA_bi, file="knnLDA_bi.RData")
+
+max(knnLDA_bi$results$Accuracy) 
+
+#plots
+plot(knnLDA_bi)
+
+#elapsed time
+knnLDA_bi$times
+
+```
+
+KNN produced an accuracy of 68.72. Elapsed time is 77.42 secs
+
+
+## Model Evaluation on Test Sets
+
+We check the performance of our models on our test set.
+
+##### Random Forest
+
+```{r}
+#predict on test data
+rfLDA_bi.predict <- predict(rfLDA_bi, newdata = test_lda_bi.df)
+
+#confusion matrix
+confusionMatrix(rfLDA_bi.predict, docvars(test.dfm, "gender"))
+```
+
+Our random forest model produced an accuracy of 69.14.
+
+
+##### Ridge Regression
+
+```{r}
+#predict on test data
+ridgeLDA_bi.predict <- predict(ridgeLDA_bi, newdata = test_lda_bi.df)
+
+#confusion matrix
+confusionMatrix(ridgeLDA_bi.predict, docvars(test.dfm, "gender"))
+```
+
+
+##### Naive Bayes
+
+```{r}
+#predict on test data
+nbLDA_bi.predict <- predict(nbLDA_bi, newdata = test_lda_bi.df)
+
+#confusion matrix
+confusionMatrix(nbLDA_bi.predict, docvars(test.dfm, "gender"))
+```
+
+Naive Bayes produces an accuracy of 61.7
+
+##### k-Nearest Neighbors
+
+```{r}
+#predict on test data
+knnLDA_bi.predict <- predict(knnLDA_bi, newdata = test_lda_bi.df)
+
+#confusion matrix
+confusionMatrix(knnLDA_bi.predict, docvars(test.dfm, "gender"))
+```
+
+kNN produced an accuracy of 69.81
