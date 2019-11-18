@@ -1,0 +1,353 @@
+---
+title: "Feature Selection using UniqueK (K=400; Bigrams)"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+In this file, we apply the UniqueK with K = 400 and add bigrams to our feature matrix.
+
+```{r}
+# install required packages.
+#install.packages(c("tidyverse", "caret", "quanteda", "kernlab", "klaR", "glmnet", "ldatuning","mlbench", "randomForest", "e1071", "topicmodels", "DALEX", "irlba", "ggthemes"))
+
+##load libraries
+library(tidyverse)
+library(caret)
+library(quanteda)
+library(kernlab) #svm
+library(klaR) #naive bayes
+library(glmnet) 
+library(ldatuning)
+library(mlbench)
+library(randomForest)
+library(e1071)
+library(topicmodels)
+library(DALEX)
+library(irlba)
+library(ggthemes)
+library(doSNOW)
+```
+
+```{r}
+#import train_tokens
+load("train_bi.dfm.RData")
+
+#apply tf-idf
+train_bi.tfidf <- dfm_tfidf(train_bi.dfm)
+```
+
+
+### UniqueK (K=400)
+
+```{r}
+#get topmost frequent 400 words for each gender
+topwords400_bi <- topfeatures(train_bi.tfidf, 400, groups = "gender")
+
+#convert list elements to dataframes
+dtopwords400_bi <- lapply(topwords400_bi, function(x) {
+  x <- as.data.frame(x)
+  tibble::rownames_to_column(x)
+})
+
+#extract only the unique words
+utopwords400_bi <- unique(unlist(lapply(dtopwords400_bi, function(x) unique(x[,1]))))
+
+# we subset the dfm to match the unique features
+train_bi_sub400.dfm <- train_bi.tfidf %>%
+  dfm_select(pattern = utopwords400_bi)
+
+#save the subset dfm
+save(train_bi_sub400.dfm, file="train_bi_sub.dfm.RData")
+```
+
+We merge the subset bigrammed dfm with the subset unigrammed dfm. We obtain a dfm with 1041 features - a combination of 485 features from the subset unigrammed dfm and 556 features from the subset bigrammed dfm.
+
+```{r}
+train_merged_sub400.dfm <- cbind(train_sub400.dfm, train_bi_sub400.dfm)
+
+dim(train_merged_sub400.dfm)
+```
+
+We now train our models on this train dfm.
+
+
+### Model Training
+
+We use the caret package for 5-fold cross validation to help reduce risk of overfitting in the models. We choose the following parameters:
+
+* number = 5(It means we are using 5 fold cross-validation)  
+* method= "cv"(Means we are using cross-validation
+* classProbs =TRUE (It gives the probabilities for each class.Not just the class labels)
+
+
+##### Random Forest 
+We build a random forest model.
+
+```{r}
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#mtry: Number of random variables collected at each split
+mtry <- sqrt(ncol(train_merged_sub400.dfm))
+
+tunegrid <- expand.grid(.mtry=c(1:15))
+
+#train the model
+rf400_bi <- train(as.matrix(train_merged_sub400.dfm),
+                  docvars(train_bi_sub400.dfm, "gender"),
+                  method = "rf",
+                  trControl = ctrl,
+                  tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time  
+
+
+#output
+rf400_bi
+
+#save  the model
+save(rf400_bi, file="rf400_bi.RData")
+
+max(rf400_bi$results$Accuracy) 
+
+#plots
+plot(rf400_bi)
+
+#elapsed time
+rf400_bi$times
+```
+
+The results of the random forest model show an accuracy of 69.45. Elapsed time = 9532.71 secs
+
+
+Let's run the ridge regression model
+
+#### Ridge Regression Model
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#set tune grid
+tunegrid <- expand.grid(alpha = 0, lambda = lambda)
+
+#train the model
+ridge400_bi <- train(as.matrix(train_merged_sub400.dfm),
+                     docvars(train_bi_sub400.dfm, "gender"),
+                     method = "glmnet",
+                     trControl = ctrl,
+                     tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time 
+
+#output
+ridge400_bi
+
+#save  the model
+save(ridge400_bi, file="ridge400_bi.RData")
+
+max(ridge400_bi$results$Accuracy) 
+
+#plots
+plot(ridge400_bi)
+
+#elapsed time
+ridge400_bi$times
+```
+
+The ridge regression produced an accuracy of 69.21. Elapsed time = 40.20 secs. 
+
+
+Let's run the naive bayes model
+
+#### Naive Bayes Model
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#train the model
+nb400_bi <- train(as.matrix(train_merged_sub400.dfm),
+                  docvars(train_bi_sub400.dfm, "gender"),
+                  method = "nb",
+                  trControl = ctrl)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time
+
+#output
+nb400_bi
+
+#save  the model
+save(nb400_bi, file="nb400_bi.RData")
+
+max(nb400_bi$results$Accuracy) 
+
+#plots
+plot(nb400_bi)
+
+nb400_bi$times
+```
+
+The naive bayes model produced an accuracy score of 63.44. Elapsed time =  157.17 secs
+
+Let's run the kNN model
+
+#### k-Nearest Neighbours Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#train the model
+knn400_bi <- train(as.matrix(train_merged_sub400.dfm),
+                   docvars(train_bi_sub400.dfm, "gender"),
+                   method = "knn",
+                   trControl = ctrl,
+                   tuneLength = 10)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+knn400_bi
+
+#save  the model
+save(knn400_bi, file="knn400_bi.RData")
+
+max(knn400_bi$results$Accuracy) 
+
+#plots
+plot(knn400_bi)
+
+#elapsed time
+knn400_bi$times
+```
+
+
+
+### Evaluation on Test Set
+
+We evaluate the performance of the models on the test set. First we project our weighted test dfm into the feature space of the train dfm to ensure it has the same features as the train dfm.
+
+```{r}
+#import bigrammed test dfm
+load(test_tokens_bi.dfm.RData)
+
+# project test dfm into the feature space of the train dfm
+test400_bi.dfm <- dfm_match(test_tokens_bi.dfm, featnames(train_merged_sub400.dfm))
+```
+
+
+##### Random Forest
+```{r}
+# predict on test data
+rf400_bi.predict <- predict(rf400_bi, newdata = test400_bi.dfm)
+
+#confusion matrix
+confusionMatrix(rf400_bi.predict, docvars(test.dfm, "gender"))
+```
+The random forest model produced an accuracy  of 68.3
+
+##### Ridge Regression
+```{r}
+# predict on test data
+ridge400_bi.predict <- predict(ridge400_bi, newdata = test400_bi.dfm)
+
+#confusion matrix
+confusionMatrix(ridge400_bi.predict, docvars(test.dfm, "gender"))
+```
+The ridge regression model produced an accuracy of 68.34
+
+##### Naive Bayes
+```{r}
+# predict on test data
+nb400_bi.predict <- predict(nb400_bi, newdata = test400_bi.dfm)
+
+#confusion matrix
+confusionMatrix(nb400_bi.predict, docvars(test.dfm, "gender"))
+```
+Naive Bayes produced an accuracy of 62.89
+
+##### kNN
+```{r}
+# predict on test data
+knn400_bi.predict <- predict(knn400_bi, newdata = test400_bi.dfm)
+
+#confusion matrix
+confusionMatrix(knn400_bi.predict, docvars(test.dfm, "gender"))
+```
+
+KNN produces an accuracy of 67.84.
+

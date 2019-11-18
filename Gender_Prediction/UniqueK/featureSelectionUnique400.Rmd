@@ -1,0 +1,326 @@
+---
+title: "Feature Selection using UniqueK (K=400)"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+In this file, we apply the UniqueK with K = 400.
+
+```{r}
+
+# install required packages.
+#install.packages(c("tidyverse", "caret", "quanteda", "kernlab", "klaR", "glmnet", "ldatuning","mlbench", "randomForest", "e1071", "topicmodels", "DALEX", "irlba", "ggthemes"))
+
+##load libraries
+library(tidyverse)
+library(caret)
+library(quanteda)
+library(kernlab) #svm
+library(klaR) #naive bayes
+library(glmnet) 
+library(ldatuning)
+library(mlbench)
+library(randomForest)
+library(e1071)
+library(topicmodels)
+library(DALEX)
+library(irlba)
+library(ggthemes)
+library(doSNOW)
+```
+
+```{r}
+#import train dfm
+load("train_tokens.dfm.RData")
+
+#apply tf_idf
+train_tokens.tfidf <- dfm_tfidf(train_tokens.dfm)
+```
+
+#### UniqueK (K = 400)
+
+```{r}
+#get topmost frequent 400 words for each gender
+topwords400 <- topfeatures(train_tokens.tfidf, 400, groups = "gender")
+
+#convert list elements to dataframes
+dtopwords400 <- lapply(topwords400, function(x) {
+  x <- as.data.frame(x)
+  tibble::rownames_to_column(x)
+})
+
+
+#extract only the unique words
+utopwords400 <- unique(unlist(lapply(dtopwords400, function(x) unique(x[,1]))))
+
+# we subset the dfm to match the unique features
+train_sub400.dfm <- train_tokens.tfidf %>%
+  dfm_select(pattern = utopwords400)
+
+#check dimensions
+dim(train_sub400.dfm)
+
+#save the subset dfm
+save(train_sub400.dfm, file="train_sub400.dfm.RData")
+```
+
+
+### Model Training
+
+We use the caret package for 5-fold cross validation to help reduce risk of overfitting in the models. We choose the following parameters:
+
+* number = 5(It means we are using 5 fold cross-validation)  
+* method= "cv"(Means we are using cross-validation
+* classProbs =TRUE (It gives the probabilities for each class.Not just the class labels)
+
+
+##### Random Forest 
+We build a random forest model.
+
+```{r}
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#mtry: Number of random variables collected at each split
+mtry <- sqrt(ncol(train_sub400.dfm))
+
+tunegrid <- expand.grid(.mtry=c(1:15))
+
+#train the model
+rf400 <- train(as.matrix(train_sub400.dfm),
+                      docvars(train_sub400.dfm, "gender"),
+                      method = "rf",
+                      metric = "Accuracy",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+#output
+rf400
+
+#save  the model
+save(rf400, file="rf400.RData")
+
+max(rf400$results$Accuracy) 
+
+#plot
+plot(rf400)
+
+#check elapsed time
+rf400$times
+```
+
+The random forest produced an accuracy score of 68.73. It ran for 3633.91 secs. The final value used for the model was mtry = 14.
+
+Let's run the ridge regression model
+
+#### Ridge Regression Model
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#set tune grid
+tunegrid <- expand.grid(alpha = 0, lambda = lambda)
+
+#train the model
+ridge400 <- train(as.matrix(train_sub400.dfm),
+                  docvars(train_sub400.dfm, "gender"),
+                  method = "glmnet",
+                  trControl = ctrl,
+                  tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+ridge400
+
+#save  the model
+save(ridge400, file="ridge400.RData")
+
+max(ridge400$results$Accuracy) 
+
+#plots
+plot(ridge400)
+
+#elapsed time
+ridge400$times
+```
+
+The ridge regression produced an accuracy of 67.82. Elapsed time is 20.06 secs. The final values used for the model were alpha = 0 and lambda = 0.231013.
+
+
+Let's run the naive bayes model
+#### Naive Bayes Model
+```{r}
+# to reproduce results
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#train the model
+nb400 <- train(as.matrix(train_sub400.dfm),
+               docvars(train_sub400.dfm, "gender"),
+               method = "nb",
+               trControl = ctrl)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+nb400
+
+#save  the model
+save(nb400, file="nb400.RData")
+
+max(nb400$results$Accuracy) 
+
+#plots
+plot(nb400)
+
+nb400$times
+```
+
+The naive bayes model produced an accuracy score of 64.34. Elapsed time = 149.63 secs
+
+Let's run the kNN model
+
+#### k-Nearest Neighbours Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE)
+
+#train the model
+knn400 <- train(as.matrix(train_sub400.dfm),
+               docvars(train_sub400.dfm, "gender"),
+               method = "knn",
+               trControl = ctrl,
+               tuneLength = 10)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+knn400
+
+#save  the model
+save(knn400, file="knn400.RData")
+
+max(knn400$results$Accuracy) 
+
+#plots
+plot(knn400)
+
+#elapsed time
+knn400$times
+```
+
+The KNN model produced an accuracy scoore of 66.83. Elapsed time is 881.69 secs. The final value used for the model was k = 17.
+
+
+### Evaluation on Test Set
+
+We evaluate the performance of the models on the test set. First we project our weighted test dfm into the feature space of the train dfm to ensure it has the same features as the train dfm.
+
+```{r}
+#import test dfm
+load(test_tokens.dfm.RData)
+
+#project test dfm into the feature space of the train dfm 
+test400.dfm <- dfm_match(test_tokens.dfm, featnames(train_sub400.dfm))
+```
+
+
+##### Random Forest
+```{r}
+# predict on test data
+rf400.predict <- predict(rf400, newdata = test400.dfm)
+
+#confusion matrix
+confusionMatrix(rf400.predict, docvars(test.dfm, "gender"))
+```
+The random forest model produced an accuracy  of 68.43
+
+##### Ridge Regression
+```{r}
+# predict on test data
+ridge400.predict <- predict(ridge400, newdata = test400.dfm)
+
+#confusion matrix
+confusionMatrix(ridge400.predict, docvars(test.dfm, "gender"))
+```
+The ridge regression model produced an accuracy of 67.37
+
+##### Naive Bayes
+```{r}
+# predict on test data
+nb400.predict <- predict(nb400, newdata = test.dfm)
+
+#confusion matrix
+confusionMatrix(nb400.predict, docvars(test.dfm, "gender"))
+```
+Naive Bayes produced an accuracy of 64.12
+
+##### kNN
+```{r}
+# predict on test data
+knn400.predict <- predict(knn400, newdata = test400.dfm)
+
+#confusion matrix
+confusionMatrix(knn400.predict, docvars(test.dfm, "gender"))
+```
+
+KNN produces an accuracy of 67.15.

@@ -1,0 +1,459 @@
+---
+title: "Feature Selection using UniqueK (K=200)"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+#### UniqueK
+
+UniqueK is a simple feature selection method we developed for dimensionality reduction in our gender prediction task. This approach was motivated by the need to overcome the computational hurdle we were faced with during the course of our project. The main  idea of this method is to further reduce the size of our feature vocabulary after basic preprocessing steps by constructing lists of the K most frequent unique words by gender. These lists are then merged and overlapping words are dropped. The final list then contains features that will serve as the most useful predictors for the model, under the assumption that they are unique to the two predicted classes. This is a very simple feature selection, hence, the choice of number of words K is subjective to the person applying the method. For our projet, we choose K = 200 and K = 400. In this file, we apply K= 200.
+
+```{r}
+
+# install required packages.
+#install.packages(c("tidyverse", "caret", "quanteda", "kernlab", "klaR", "glmnet", "ldatuning","mlbench", "randomForest", "e1071", "topicmodels", "DALEX", "irlba", "ggthemes"))
+
+##load libraries
+library(tidyverse)
+library(caret)
+library(quanteda)
+library(kernlab) #svm
+library(klaR) #naive bayes
+library(glmnet) 
+library(ldatuning)
+library(mlbench)
+library(randomForest)
+library(e1071)
+library(topicmodels)
+library(DALEX)
+library(irlba)
+library(ggthemes)
+library(doSNOW)
+```
+ 
+```{r}
+#import data
+guardian <- read.csv("guardian.csv", stringsAsFactors = FALSE)
+df <- guardian %>% dplyr::select(text, gender) %>% 
+  mutate(gender = factor(gender))
+remove(guardian)
+
+# add a new variable that captures the length of articles
+df$textLength <- nchar(df$text)
+summary(df$textLength)
+
+#remove missing observations
+df <- df[complete.cases(df), ]
+
+#remove articles with text length less than 1500
+df <- df %>% 
+  filter(textLength >= 1500)
+```
+
+### Stratified Splitting
+
+We perform a 70/30 stratified splitting of our gender class 
+```{r}
+# ensure repeatable results
+set.seed(123)
+index <- createDataPartition(df$gender, times = 1, p = 0.7, list = FALSE)
+
+# generate train and test sets
+train <- df[index,]
+test <- df[-index,]
+
+# check to see proportions are maintained
+prop.table(table(train$gender))
+prop.table(table(test$gender))
+
+#create variable to denote if observation is train or test
+train$train_test <- c("train")
+test$train_test <- c("test")
+
+#merge train and test data
+merged <- rbind(train, test)
+
+```
+
+
+### Data Preprocessing and Feature Extraction
+
+```{r}
+#createa a corpus
+corp <- corpus(train, text_field = "text")
+
+#tokenize the texts
+train_tokens <- tokens(corp,
+                       remove_numbers = TRUE, 
+                       remove_punct = TRUE,
+                       remove_symbols = TRUE, 
+                       remove_hyphens = TRUE,
+                       remove_twitter = TRUE,
+                       remove_url = TRUE)
+
+# lower case the tokens.
+train_tokens <- tokens_tolower(train_tokens)
+
+# remove english stopwords
+train_tokens <- tokens_select(train_tokens, stopwords(), selection = "remove")
+
+# stem the tokens
+train_tokens <- tokens_wordstem(train_tokens, language = "english")
+
+#save tokens 
+save(train_tokens, file="train_tokens.RData")
+
+# create Bag of Words model
+train_tokens.dfm <- dfm(train_tokens, tolower = FALSE)
+dim(train_tokens.dfm) #97444 features
+
+#view structure of the dfm
+summary(colSums(train_tokens.dfm))
+
+#top 6 terms by docfrequency
+sort(head(docfreq(train_tokens.dfm)), decreasing = TRUE)
+
+# since the doc frequency is highly skewed we trim the dfm to keep only terms that appear 
+# in at most 40% of the documents. 
+train_tokens.dfm <- dfm_trim(train_tokens.dfm, max_docfreq = 0.4, docfreq_type = "prop")
+
+# inspect the dimensions of the trimmed dfm
+dim(train_tokens.dfm) #97403 features
+
+
+# Next, to omit terms with low frequency, we only include terms higher than the mean of the term frequency
+train_tokens.dfm <- train_tokens.dfm[ , colSums(train_tokens.dfm) > summary(colSums(train_tokens.dfm))[4]]
+
+#inspect the dimensions: we are left with 8290 terms
+dim(train_tokens.dfm) #9370 features
+
+#save the dfm and the merged dataset
+save(train_tokens.dfm, file = "train_tokens.dfm.RData")
+```
+
+
+#### Term Frequency-Inverse Document Frequency (TF-IDF) 
+
+To further improve the quality of information contain within our train DFM, we use the TF-IDF weight. The TF calculation accounts for the fact that longer documents will have higher individual term counts. Applying  TF normalizes all documents in the corpus to be length independent. The IDF calculation accounts for the frequency of term appearance in all documents in the corpus. The intuition being that a term that appears in every document has no predictive power. The multiplication of TF by IDF for each cell in the matrix allows for weighting of TF and IDF for each cell in the matrix.
+
+```{r}
+#apply tf_idf
+train_tokens.tfidf <- dfm_tfidf(train_tokens.dfm)
+```
+
+#### Unique K (K = 200)
+
+```{r}
+#get topmost frequent 200 words for each gender
+topwords <- topfeatures(train_tokens.tfidf, 200, groups = "gender")
+
+#convert list elements to dataframes
+dtopwords <- lapply(topwords, function(x) {
+  x <- as.data.frame(x)
+  tibble::rownames_to_column(x)
+})
+#extract only the unique words
+utopwords <- unique(unlist(lapply(dtopwords, function(x) unique(x[,1]))))
+
+# we subset the dfm to match the unique features
+train_sub.dfm <- train_tokens.tfidf %>%
+  dfm_select(pattern = utopwords)
+
+#check dimensions
+dim(train_sub.dfm)
+
+#save the subset dfm
+save(train_sub.dfm, file="train_sub.dfm.RData")
+```
+
+
+### Model Training
+
+We use the caret package for 5-fold cross validation to help reduce risk of overfitting in the models. We choose the following parameters:
+
+* number = 5(It means we are using 5 fold cross-validation)  
+* method= "cv"(Means we are using cross-validation
+* classProbs =TRUE (It gives the probabilities for each class.Not just the class labels)
+
+
+##### Random Forest 
+We build a random forest model.
+
+```{r}
+library(randomForest)
+
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#mtry: Number of random variables collected at each split
+mtry <- sqrt(ncol(train_sub.dfm))
+
+tunegrid <- expand.grid(.mtry=c(1:15))
+
+#train the model
+rf200 <- train(as.matrix(train_sub.dfm),
+                      docvars(train_sub.dfm, "gender"),
+                      method = "rf",
+                      metric = "Accuracy",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+#output
+rf200
+
+#save  the model
+save(rf200, file="rf200.RData")
+
+max(rf200$results$Accuracy) 
+
+#plot
+plot(rf200)
+
+#check elapsed time
+rf200$times
+```
+
+The random forest produced an accuracy score of 69.15. It ran for 8059.84 secs.
+
+
+Let's run the ridge regression model
+
+#### Ridge Regression Model
+```{r}
+# to reproduce results
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#set tune grid
+tunegrid <- expand.grid(alpha = 0, lambda = lambda)
+
+#train the model
+ridge200 <- train(as.matrix(train_sub.dfm),
+                  docvars(train_sub.dfm, "gender"),
+                  method = "glmnet",
+                  trControl = ctrl,
+                  tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+ridge200
+
+#save  the model
+save(ridge200, file="ridge200.RData")
+
+max(ridge200$results$Accuracy) 
+
+#plot
+plot(ridge200)
+
+#check elapsed time
+ridge200$times
+```
+
+The ridge regression performed poorly than the random forest. Its accuracy is 67.97. Elapsed time = 13.50 secs.
+
+
+Let's run the naive bayes model
+#### Naive Bayes Model
+```{r}
+# to reproduce results
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#train the model
+nb200 <- train(as.matrix(train_sub.dfm),
+               docvars(train_sub.dfm, "gender"),
+               method = "nb",
+               trControl = ctrl)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+nb200
+
+#save  the model
+save(nb200, file="nb200.RData")
+
+max(nb200$results$Accuracy) 
+
+#plot
+plot(nb200)
+
+#check elapsed time
+nb200$times
+```
+
+The naive bayes model produced an accuracy score of 65.97. Elapsed time = 84.11 secs
+
+Let's run the kNN model
+
+#### k-Nearest Neighbours Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#train the model
+knn200 <- train(as.matrix(train_sub.dfm),
+                docvars(train_sub.dfm, "gender"),
+                method = "knn",
+                trControl = ctrl,
+                tuneLength = 10)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+knn200
+
+#save  the model
+save(knn200, file="knn200.RData")
+
+max(knn200$results$Accuracy) 
+
+#plots
+plot(knn200)
+
+#elapsed time
+knn200$times
+```
+
+The kNN model produced an accuracy score of 67.12. Elapsed time is 221.18 sec. The final value used for the model was k = 23.
+
+### Evaluation on Test Set
+
+We evaluate the performance of the models on the test set. First we weight the test dfm and then project the dfm into the feature space of our train dfm to ensure it has the same features as the train dfm.
+
+```{r}
+#create a corpus
+corp <- corpus(test, text_field = "text")
+
+#tokenize the texts
+test_tokens <- tokens(corp,
+                       remove_numbers = TRUE, 
+                       remove_punct = TRUE,
+                       remove_symbols = TRUE, 
+                       remove_hyphens = TRUE,
+                       remove_twitter = TRUE,
+                       remove_url = TRUE)
+
+# lower case the tokens.
+test_tokens <- tokens_tolower(test_tokens)
+
+# remove english stopwords
+test_tokens <- tokens_select(test_tokens, stopwords(), selection = "remove")
+
+# stem the tokens
+test_tokens <- tokens_wordstem(test_tokens, language = "english")
+
+#save tokens 
+save(test_tokens, file="test_tokens.RData")
+
+# create Bag of Words model
+test_tokens.dfm <- dfm(test_tokens, tolower = FALSE)
+
+#apply tfidf weight
+test_tokens.dfm <- dfm_tfidf(test_tokens.dfm)
+```
+
+We map our test dfm into the feature space of the train dfm
+
+```{r}
+test.dfm <- dfm_match(test_tokens.dfm, featnames(train_sub.dfm))
+```
+
+
+##### Random Forest
+```{r}
+# predict on test data
+rf200.predict <- predict(rf200, newdata = test.dfm)
+
+#confusion matrix
+confusionMatrix(rf200.predict, docvars(test.dfm, "gender"))
+```
+The random forest model produced an accuracy  of 68.9
+
+##### Ridge Regression
+```{r}
+# predict on test data
+ridge200.predict <- predict(ridge200, newdata = test.dfm)
+
+#confusion matrix
+confusionMatrix(ridge200.predict, docvars(test.dfm, "gender"))
+```
+The ridge regression model produced an accuracy of 67.37
+
+##### Naive Bayes
+```{r}
+# predict on test data
+nb200.predict <- predict(nb200, newdata = test.dfm)
+
+#confusion matrix
+confusionMatrix(nb200.predict, docvars(test.dfm, "gender"))
+```
+Naive Bayes produced an accuracy of 64.89
+
+##### kNN
+```{r}
+# predict on test data
+knn200.predict <- predict(knn200, newdata = test.dfm)
+
+#confusion matrix
+confusionMatrix(knn200.predict, docvars(test.dfm, "gender"))
+```
+
+KNN produces an accuracy of 66.78.

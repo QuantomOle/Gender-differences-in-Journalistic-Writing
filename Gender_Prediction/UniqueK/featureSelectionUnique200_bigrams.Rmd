@@ -1,0 +1,413 @@
+---
+title: "featureSelectionUnique200_bigrams"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+In this file, we apply the UniqueK with K = 200 and add bigrams to our feature matrix.
+
+### Bigrams
+
+N-grams have proven to often lead to increased performance (e.g., accuracy) for machine learning models 
+trained with more than just unigrams. We add bigrams to our training data and the TF-IDF to see if the accuracy improves. 
+
+
+```{r}
+#import train_tokens
+load("train_tokens.RData")
+```
+
+
+### Data Preprocessing and Feature Extraction
+
+```{r}
+#add bigrams to our feature vocabulary
+train_tokens_bi <- tokens_ngrams(train_tokens, n = 2)
+
+# convert tokens to dfm using Bag of Words model
+train_bi.dfm <- dfm(train_tokens_bi, tolower = FALSE)
+dim(train_bi.dfm) 
+
+
+#view structure of the dfm
+summary(colSums(train_bi.dfm))
+
+#top 6 terms by docfrequency
+sort(head(docfreq(train_bi.dfm)), decreasing = TRUE)
+
+# since the doc frequency is highly skewed we trim the dfm to keep only terms that appear 
+# in at most 40% of the documents. 
+train_bi.dfm <- dfm_trim(train_bi.dfm, max_docfreq = 0.4, docfreq_type = "prop")
+
+# inspect the dimensions of the trimmed dfm
+dim(train_bi.dfm) 
+
+
+# Next, to omit terms with low frequency, we only include terms higher than the mean of the term frequency
+train_bi.dfm <- train_bi.dfm[ , colSums(train_bi.dfm) > summary(colSums(train_bi.dfm))[4]]
+
+#inspect the dimensions: we are left with 611400 terms
+dim(train_bi.dfm) 
+
+#save the bigrammed-dfm
+save(train_bi.dfm, file = "train_bi.dfm.RData")
+```
+
+
+#### Term Frequency-Inverse Document Frequency (TF-IDF) 
+
+To further improve the quality of information contain within our train DFM, we use the TF-IDF weight. The TF calculation accounts for the fact that longer documents will have higher individual term counts. Applying  TF normalizes all documents in the corpus to be length independent. The IDF calculation accounts for the frequency of term appearance in all documents in the corpus. The intuition being that a term that appears in every document has no predictive power. The multiplication of TF by IDF for each cell in the matrix allows for weighting of TF and IDF for each cell in the matrix.
+
+```{r}
+#apply tf_idf
+train_bi.tfidf <- dfm_tfidf(train_bi.dfm)
+```
+
+### Feature Selection
+The feature selection technique applied here was to select the topmost frequent 200 words for each gender, and then ignoring the common words which appear in both.  We then match the features of our weighted `dfm` to these words resulting into a smaller dfm.
+
+```{r}
+#get topmost frequent 200 words for each gender
+topwords_bi <- topfeatures(train_bi.tfidf, 200, groups = "gender")
+
+#convert list elements to dataframes
+dtopwords <- lapply(topwords_bi, function(x) {
+  x <- as.data.frame(x)
+  tibble::rownames_to_column(x)
+})
+
+#extract only the unique words
+utopwords_bi <- unique(unlist(lapply(dtopwords, function(x) unique(x[,1]))))
+
+# we subset the dfm to match the unique features
+train_bi_sub.dfm <- train_bi.tfidf %>%
+  dfm_select(pattern = utopwords_bi)
+
+#save the subset dfm
+save(train_bi_sub.dfm, file="train_bi_sub.dfm.RData")
+```
+
+We merge the subset bigrammed dfm with the subset unigrammed dfm. We obtain a dfm with 538 features - a combination of 261 features from the subset unigrammed dfm and 277 features from the subset bigrammed dfm.
+
+```{r}
+train_merged_sub.dfm <- cbind(train_sub.dfm, train_bi_sub.dfm)
+```
+
+We now train our models on this train dfm.
+
+
+### Model Training
+
+We use the caret package for 5-fold cross validation to help reduce risk of overfitting in the models. We choose the following parameters:
+
+* number = 5(It means we are using 5 fold cross-validation)  
+* method= "cv"(Means we are using cross-validation
+* classProbs =TRUE (It gives the probabilities for each class.Not just the class labels)
+
+
+##### Random Forest 
+We build a random forest model.
+
+```{r}
+
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#mtry: Number of random variables collected at each split
+mtry <- sqrt(ncol(train_merged_sub.dfm))
+
+tunegrid <- expand.grid(.mtry=c(1:15))
+
+#train the model
+rf200_bi <- train(as.matrix(train_merged_sub.dfm),
+                      docvars(train_bi_sub.dfm, "gender"),
+                      method = "rf",
+                      trControl = ctrl,
+                      tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time  
+
+
+#output
+rf200_bi
+
+#save  the model
+save(rf200_bi, file="rf200_bi.RData")
+
+max(rf200_bi$results$Accuracy) 
+
+#plots
+plot(rf200_bi)
+
+#elapsed time
+rf200_bi$times
+```
+
+The results of the random forest model (using the bigrammed subset dfm) shows a slight increase from the 69.15 (using unigrammed subset dfm) to 69.58. Elapsed time = 4929.17 secs
+
+
+Let's run the ridge regression model
+
+#### Ridge Regression Model
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     search = "grid",
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+#set up a grid range of lambda values
+lambda <- 10^seq(-3, 3, length = 100)
+
+#set tune grid
+tunegrid <- expand.grid(alpha = 0, lambda = lambda)
+
+#train the model
+ridge200_bi <- train(as.matrix(train_merged_sub.dfm),
+                  docvars(train_bi_sub.dfm, "gender"),
+                  method = "glmnet",
+                  trControl = ctrl,
+                  tuneGrid = tunegrid)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time 
+
+#output
+ridge200_bi
+
+#save  the model
+save(ridge200_bi, file="ridge200_bi.RData")
+
+max(ridge200_bi$results$Accuracy) 
+
+#plots
+plot(ridge200_bi)
+
+#elapsed time
+ridge200_bi$times
+```
+
+The ridge regression produced an accuracy of 68.73. Elapsed time = 22.41 secs. 
+
+
+Let's run the naive bayes model
+
+#### Naive Bayes Model
+```{r}
+# to reproduce results
+set.seed(123)
+
+# time the code execution
+start.time <- Sys.time()
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#train the model
+nb200_bi <- train(as.matrix(train_merged_sub.dfm),
+               docvars(train_bi_sub.dfm, "gender"),
+               method = "nb",
+               trControl = ctrl)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+# Total time of execution on workstation
+total.time <- Sys.time() - start.time
+total.time
+
+#output
+nb200_bi
+
+#save  the model
+save(nb200_bi, file="nb200_bi.RData")
+
+max(nb200_bi$results$Accuracy) 
+
+#plots
+plot(nb200_bi)
+
+nb200_bi$times
+```
+
+The naive bayes model produced an accuracy score of 63.44. Elapsed time =  157.17 secs
+
+Let's run the kNN model
+
+#### k-Nearest Neighbours Model
+
+```{r}
+# to reproduce results
+set.seed(123)
+
+# Create a cluster to work on 10 logical cores.
+cl <- makeCluster(10, type = "SOCK")
+registerDoSNOW(cl)
+
+#resampling scheme
+ctrl <- trainControl(method = "cv", 
+                     number = 5,
+                     savePredictions = TRUE,
+                     classProbs = TRUE
+)
+
+#train the model
+knn200_bi <- train(as.matrix(train_merged_sub.dfm),
+               docvars(train_bi_sub.dfm, "gender"),
+               method = "knn",
+               trControl = ctrl,
+               tuneLength = 10)
+
+# Processing is done, stop cluster
+stopCluster(cl)
+
+#output
+knn200_bi
+
+#save  the model
+save(knn200_bi, file="knn200_bi.RData")
+
+max(knn200_bi$results$Accuracy) 
+
+#plots
+plot(knn200_bi)
+
+#elapsed time
+knn200_bi$times
+```
+
+KNN model produced an accuracy of 67.40. Elapsed time is 1001.69 secs. The final value used for the model was k = 23.
+
+
+
+
+### Evaluation on Test Set
+
+We evaluate the performance of the models on the test set. First we weight test dfm and then project the dfm into the feature space of our train dfm to ensure it has the same features as the train dfm.
+
+```{r}
+#create a corpus
+corp <- corpus(test, text_field = "text")
+
+#tokenize the texts
+test_tokens <- tokens(corp,
+                       remove_numbers = TRUE, 
+                       remove_punct = TRUE,
+                       remove_symbols = TRUE, 
+                       remove_hyphens = TRUE,
+                       remove_twitter = TRUE,
+                       remove_url = TRUE)
+
+# lower case the tokens.
+test_tokens <- tokens_tolower(test_tokens)
+
+# remove english stopwords
+test_tokens <- tokens_select(test_tokens, stopwords(), selection = "remove")
+
+# stem the tokens
+test_tokens <- tokens_wordstem(test_tokens, language = "english")
+
+#add bigrams to our feature vocabulary
+test_tokens_bi <- tokens_ngrams(test_tokens, n = 1:2)
+
+# create Bag of Words model
+test_tokens_bi.dfm <- dfm(test_tokens_bi, tolower = FALSE)
+
+#apply tfidf weight
+test_tokens_bi.dfm <- dfm_tfidf(test_tokens_bi.dfm)
+```
+
+We map our test dfm into the feature space of the train dfm
+
+```{r}
+test200_bi.dfm <- dfm_match(test_tokens_bi.dfm, featnames(train_merged_sub.dfm))
+```
+
+
+##### Random Forest
+```{r}
+# predict on test data
+rf200_bi.predict <- predict(rf200_bi, newdata = test200_bi.dfm)
+
+#confusion matrix
+confusionMatrix(rf200_bi.predict, docvars(test.dfm, "gender"))
+```
+The random forest model produced an accuracy  of 68.3
+
+##### Ridge Regression
+```{r}
+# predict on test data
+ridge200_bi.predict <- predict(ridge200_bi, newdata = test200_bi.dfm)
+
+#confusion matrix
+confusionMatrix(ridge200_bi.predict, docvars(test.dfm, "gender"))
+```
+The ridge regression model produced an accuracy of 68.34
+
+##### Naive Bayes
+```{r}
+# predict on test data
+nb200_bi.predict <- predict(nb200_bi, newdata = test200_bi.dfm)
+
+#confusion matrix
+confusionMatrix(nb200_bi.predict, docvars(test.dfm, "gender"))
+```
+Naive Bayes produced an accuracy of 62.89
+
+##### kNN
+```{r}
+# predict on test data
+knn200_bi.predict <- predict(knn200_bi, newdata = test200_bi.dfm)
+
+#confusion matrix
+confusionMatrix(knn200_bi.predict, docvars(test.dfm, "gender"))
+```
+
+KNN produces an accuracy of 67.84.
+
